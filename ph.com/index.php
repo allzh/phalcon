@@ -1,10 +1,41 @@
 <?php
-/**
+/*
+ * 域名访问入口
  * Created by PhpStorm.
  * User: Disen
  * Date: 2017/12/25
  * Time: 15:29
  */
+
+
+/**
+ * 截获错误代码处理代码 提交日志服务器
+ */
+register_shutdown_function(
+    function () {
+        $e = error_get_last();
+        if ($e) {
+            include_once dirname(__DIR__) .
+                '/platform_libs/bbg/log/Log.php';
+            $Log = \platform\bbg\log\Log::getInstance();
+            $Log->errors_info($e);
+            get_cfg_var('mall.runtime') != 'pro' && var_dump($e);//非生产环境输出错误
+        }
+    });
+
+/**
+ * 注册截获用户错误的方法提交到日志服务器
+ */
+set_error_handler(
+    function ($errno, $errstr, $errfile, $errline) {
+        include_once dirname(__DIR__) . '/platform_libs/bbg/log/Log.php';
+        $Log = \platform\bbg\log\Log::getInstance();
+        $data = array('type' => $errno, 'message' => $errstr,
+            'file' => $errfile, 'line' => $errline);
+        $Log->errors_info($data);
+        //get_cfg_var('mall.runtime') != 'pro' && $errno <> 8  && var_dump($data);//非生产环境,非Notice 输出错误
+    }, E_ALL);
+
 
 try {
     define('BBG_PATH', __DIR__ . DIRECTORY_SEPARATOR . "app" .
@@ -42,7 +73,10 @@ try {
     $loader = new Phalcon\Loader();
     $loader->registerDirs(array(
         './app/controllers/',
-        './app/models/'
+        './app/models/',
+        './app/config/',
+        './app/libs/',
+        './app/libs/tags/'
     ))->register();
 
 
@@ -53,15 +87,35 @@ try {
         'platform' => '../platform_libs',
     )) -> register();
 
+    require_once BBG_PATH . 'base.php';
+
     // Create a DI
     $di = new Phalcon\Di\FactoryDefault();
 
-    // Setup the view component
-    $di->set('view', function () {
-        $view = new Phalcon\Mvc\View();
-        $view->setViewsDir('./app/views/');
-        return $view;
+    $di->set('voltService', function($view, $di) {
+        //模板缓存目录不存在就创建
+        if (!is_dir(COMPILED_VIEWS_PATH)) {
+            mkdir(COMPILED_VIEWS_PATH, 0777, true);
+        }
+        $volt = new Phalcon\Mvc\View\Engine\Volt($view, $di);
+        $volt->setOptions(array(
+            "compiledPath" => COMPILED_VIEWS_PATH,
+            "compiledExtension" => ".php",
+            "compileAlways" => COMPILED_ALWAYS
+        ));
+        return $volt;
     });
+
+    // Setup the view component
+    $di->set('view',
+        function () {
+            $view = new \Phalcon\Mvc\View();
+            $view->setViewsDir('./app/views/');
+            $view->registerEngines(
+                array(".phtml" => 'voltService'));
+
+            return $view;
+        });
 
     // Setup a base URI so that all generated URIs include the "tutorial" folder
     $di->set('url', function () {
